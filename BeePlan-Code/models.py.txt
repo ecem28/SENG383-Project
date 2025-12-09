@@ -1,5 +1,7 @@
-"""
+""" 
+
 models.py
+# Student A small update for version tracking
 
 Core data models and constants for the BeePlan scheduling system.
 """
@@ -173,3 +175,4 @@ class BeePlanSchedule:
                     f"Room: {s.classroom_id}"
                 )
         return "\n".join(lines)
+
