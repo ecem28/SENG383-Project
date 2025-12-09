@@ -1,0 +1,192 @@
+"""
+scheduler.py
+
+Heuristic + backtracking scheduler for the BeePlan system.
+"""
+
+from typing import Dict, List, Optional, Tuple
+
+from models import (
+    BeePlanInputData,
+    BeePlanSchedule,
+    Course,
+    CourseSession,
+    TimeSlot,
+    COURSE_TYPE_THEORY,
+    COURSE_TYPE_LAB,
+    DAYS_OF_WEEK,
+    SLOTS_PER_DAY,
+)
+from validator import (
+    check_session_constraints,
+    InstructorConflictError,
+    CapacityError,
+    RuleViolationError,
+)
+
+
+class Scheduler:
+    """
+    Main scheduling engine.
+
+    Approach:
+    - Pre-generate all possible timeslots.
+    - For each course, we need to schedule its theory and lab sessions.
+    - Use a heuristic ordering of courses (e.g., most constrained first).
+    - For each required session, attempt to place it in some classroom/time
+      that satisfies constraints; backtrack if necessary.
+    """
+
+    def __init__(self, data: BeePlanInputData) -> None:
+        self.data = data
+        self.schedule = BeePlanSchedule()
+        self.timeslots: List[TimeSlot] = self._generate_all_timeslots()
+
+    def _generate_all_timeslots(self) -> List[TimeSlot]:
+        """Generate all timeslots for the week."""
+        slots: List[TimeSlot] = []
+        for day in DAYS_OF_WEEK:
+            for index in range(SLOTS_PER_DAY):
+                slots.append(TimeSlot(day=day, slot_index=index))
+        return slots
+
+    def _sort_courses_heuristically(self, courses: List[Course]) -> List[Course]:
+        """
+        Heuristic: schedule courses with more weekly slots and higher
+        expected enrollment first (more constrained).
+        """
+        return sorted(
+            courses,
+            key=lambda c: (
+                -(c.weekly_theory_slots + c.weekly_lab_slots),
+                -c.expected_enrollment,
+            ),
+        )
+
+    def _get_candidate_classrooms(self, course: Course) -> List[str]:
+        """
+        Return candidate classroom IDs for a course.
+
+        Simplified heuristic:
+        - For lab sessions: prefer lab/hybrid rooms.
+        - For theory sessions: allow any room with enough capacity.
+        Note: we only check for type/size on actual placement, but here we
+        can filter obviously impossible ones by capacity.
+        """
+        candidates: List[str] = []
+        for classroom_id, classroom in self.data.classrooms.items():
+            if classroom.capacity < course.expected_enrollment:
+                continue
+            candidates.append(classroom_id)
+        return candidates
+
+    def _required_sessions_for_course(self, course: Course) -> List[Tuple[str, str]]:
+        """
+        Represent each required session as a tuple (session_type, pseudo_id).
+
+        Example: If course requires 3 theory slots and 1 lab slot, we might
+        return:
+            [("theory", "T1"), ("theory", "T2"), ("theory", "T3"), ("lab", "L1")]
+
+        The pseudo_id is just a label to distinguish same-type sessions internally.
+        """
+        sessions: List[Tuple[str, str]] = []
+        for i in range(course.weekly_theory_slots):
+            sessions.append((COURSE_TYPE_THEORY, f"T{i+1}"))
+        for i in range(course.weekly_lab_slots):
+            sessions.append((COURSE_TYPE_LAB, f"L{i+1}"))
+        return sessions
+
+    def generate_schedule(self) -> BeePlanSchedule:
+        """
+        Public method to generate a schedule.
+
+        Raises:
+          - RuleViolationError if unschedulable after extensive backtracking.
+        """
+        courses = self._sort_courses_heuristically(
+            list(self.data.courses.values())
+        )
+        if self._backtrack_courses(courses, course_index=0):
+            return self.schedule
+        raise RuleViolationError("Unable to find a conflict-free schedule.")
+
+    def _backtrack_courses(self, courses: List[Course], course_index: int) -> bool:
+        """
+        Backtracking driver across courses.
+        """
+        if course_index >= len(courses):
+            return True  # all courses scheduled
+
+        course = courses[course_index]
+        required_sessions = self._required_sessions_for_course(course)
+
+        # Heuristic: schedule theory sessions before labs
+        required_sessions.sort(
+            key=lambda s: 0 if s[0] == COURSE_TYPE_THEORY else 1
+        )
+
+        if self._backtrack_sessions_for_course(course, required_sessions, 0):
+            return self._backtrack_courses(courses, course_index + 1)
+        return False
+
+    def _backtrack_sessions_for_course(
+        self,
+        course: Course,
+        session_list: List[Tuple[str, str]],
+        index: int,
+    ) -> bool:
+        """
+        Backtracking for all sessions of one course.
+        """
+        if index >= len(session_list):
+            return True  # all sessions for this course scheduled
+
+        session_type, _ = session_list[index]
+
+        # Determine which instructor is responsible
+        if session_type == COURSE_TYPE_THEORY:
+            instructor_id = course.theory_instructor_id
+        else:
+            instructor_id = course.lab_instructor_id
+
+        # If no instructor specified, unschedulable configuration
+        if instructor_id is None:
+            return False
+
+        candidate_classrooms = self._get_candidate_classrooms(course)
+
+        # Try each time/classroom combination
+        for timeslot in self.timeslots:
+            for classroom_id in candidate_classrooms:
+                new_session = CourseSession(
+                    course_id=course.id,
+                    session_type=session_type,
+                    instructor_id=instructor_id,
+                    classroom_id=classroom_id,
+                    timeslot=timeslot,
+                )
+
+                try:
+                    check_session_constraints(
+                        schedule=self.schedule,
+                        new_session=new_session,
+                        course_catalog=self.data.courses,
+                        instructors=self.data.instructors,
+                        classrooms=self.data.classrooms,
+                    )
+                except (InstructorConflictError, CapacityError, RuleViolationError):
+                    # Constraint failed; try another placement
+                    continue
+
+                # If all good, tentatively add and recurse
+                self.schedule.add_session(new_session)
+                if self._backtrack_sessions_for_course(
+                    course, session_list, index + 1
+                ):
+                    return True
+                # Backtrack
+                self.schedule.remove_session(new_session)
+
+        # No valid placement found for this session
+        return False

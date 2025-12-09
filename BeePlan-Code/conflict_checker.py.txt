@@ -1,0 +1,168 @@
+"""
+conflict_checker.py
+
+Low-level conflict and overlap checks for the BeePlan scheduling system.
+"""
+
+from typing import List, Dict
+from models import (
+    CourseSession,
+    TimeSlot,
+    FRIDAY_EXAM_BLOCK_DAY,
+    FRIDAY_EXAM_BLOCK_SLOTS,
+    MAX_THEORY_SLOTS_PER_DAY,
+    COURSE_TYPE_THEORY,
+    COURSE_TYPE_LAB,
+    DEPARTMENT_CENG,
+    DEPARTMENT_SENG,
+    BeePlanSchedule,
+    Course,
+)
+
+
+def is_timeslot_equal(slot1: TimeSlot, slot2: TimeSlot) -> bool:
+    """Check if two timeslots are the same."""
+    return slot1.day == slot2.day and slot1.slot_index == slot2.slot_index
+
+
+def does_instructor_have_conflict(
+    schedule: BeePlanSchedule,
+    new_session: CourseSession,
+) -> bool:
+    """
+    Check if the instructor already has another session at the same time.
+    """
+    for session in schedule.all_sessions():
+        if (
+            session.instructor_id == new_session.instructor_id
+            and is_timeslot_equal(session.timeslot, new_session.timeslot)
+        ):
+            return True
+    return False
+
+
+def does_classroom_have_conflict(
+    schedule: BeePlanSchedule,
+    new_session: CourseSession,
+) -> bool:
+    """
+    Check if a classroom is already occupied at a given time.
+    """
+    for session in schedule.all_sessions():
+        if (
+            session.classroom_id == new_session.classroom_id
+            and is_timeslot_equal(session.timeslot, new_session.timeslot)
+        ):
+            return True
+    return False
+
+
+def is_in_friday_exam_block(timeslot: TimeSlot) -> bool:
+    """
+    Check if a timeslot falls into the Friday exam block.
+    """
+    return (
+        timeslot.day == FRIDAY_EXAM_BLOCK_DAY
+        and timeslot.slot_index in FRIDAY_EXAM_BLOCK_SLOTS
+    )
+
+
+def is_lab_following_theory(
+    course_sessions: List[CourseSession],
+    new_session: CourseSession,
+) -> bool:
+    """
+    Check the rule "lab must follow theory" when placing a lab session.
+
+    Strategy:
+    - If we are scheduling a lab, ensure that at least one theory session of the same
+      course occurs earlier in the week (in any day/slot ordering).
+    """
+    if new_session.session_type != COURSE_TYPE_LAB:
+        return True  # Not a lab; rule not relevant.
+
+    # Find the earliest theory and current lab ordering.
+    # We define the "week index" as (day_index * SLOTS_PER_DAY + slot_index).
+    # For comparison, we need a mapping day->index; we can reconstruct via sorted days.
+    # For simplicity, we use a deterministic ordering for days.
+    from models import DAYS_OF_WEEK, SLOTS_PER_DAY
+
+    day_to_index: Dict[str, int] = {d: i for i, d in enumerate(DAYS_OF_WEEK)}
+
+    def week_index(timeslot: TimeSlot) -> int:
+        return day_to_index[timeslot.day] * SLOTS_PER_DAY + timeslot.slot_index
+
+    new_index = week_index(new_session.timeslot)
+
+    earliest_theory_index = None
+    for s in course_sessions:
+        if s.session_type == COURSE_TYPE_THEORY:
+            idx = week_index(s.timeslot)
+            if earliest_theory_index is None or idx < earliest_theory_index:
+                earliest_theory_index = idx
+
+    if earliest_theory_index is None:
+        # No theory scheduled yet; we cannot guarantee lab follows theory.
+        # We allow scheduling labs later, but to satisfy the rule we require
+        # at least one theory strictly earlier than this lab.
+        return False
+
+    return earliest_theory_index < new_index
+
+
+def exceeds_daily_theory_limit(
+    schedule: BeePlanSchedule,
+    new_session: CourseSession,
+) -> bool:
+    """
+    Check if placing new_session would cause the instructor to exceed the
+    maximum number of theory slots in a single day.
+    """
+    if new_session.session_type != COURSE_TYPE_THEORY:
+        return False  # Only theory is limited.
+
+    daily_count = 0
+    for session in schedule.all_sessions():
+        if (
+            session.instructor_id == new_session.instructor_id
+            and session.session_type == COURSE_TYPE_THEORY
+            and session.timeslot.day == new_session.timeslot.day
+        ):
+            daily_count += 1
+
+    return daily_count + 1 > MAX_THEORY_SLOTS_PER_DAY
+
+
+def electives_overlap(
+    schedule: BeePlanSchedule,
+    new_session: CourseSession,
+    course_catalog: Dict[str, Course],
+) -> bool:
+    """
+    Check if CENG and SENG electives overlap.
+
+    Rule:
+    - Any elective from CENG must not overlap with any elective from SENG.
+    """
+    new_course = course_catalog.get(new_session.course_id)
+    if not new_course or not new_course.is_elective:
+        return False
+
+    for session in schedule.all_sessions():
+        if not is_timeslot_equal(session.timeslot, new_session.timeslot):
+            continue
+
+        existing_course = course_catalog.get(session.course_id)
+        if not existing_course or not existing_course.is_elective:
+            continue
+
+        # If one is CENG, the other is SENG, this is a conflict.
+        dep_new = new_course.department
+        dep_existing = existing_course.department
+
+        if (
+            {dep_new, dep_existing} == {DEPARTMENT_CENG, DEPARTMENT_SENG}
+        ):  # set equality
+            return True
+
+    return False

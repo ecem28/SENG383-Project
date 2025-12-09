@@ -1,0 +1,175 @@
+"""
+models.py
+
+Core data models and constants for the BeePlan scheduling system.
+"""
+
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Tuple
+
+
+#
+# Constants (no magic numbers)
+#
+
+DAYS_OF_WEEK: List[str] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+# We assume 50-minute slots starting from 08:30; adjust as needed
+SLOT_DURATION_MINUTES: int = 50
+
+DAY_START_HOUR: int = 8
+DAY_START_MINUTE: int = 30
+
+# Number of slots per day (example: 9 slots roughly 08:30–16:50)
+SLOTS_PER_DAY: int = 9
+
+# Friday exam block 13:20–15:10; represent as slot indices
+# You may adjust these depending on your exact slot design.
+# Here we assume:
+#   Slot 0: 08:30
+#   Slot 1: 09:20
+#   Slot 2: 10:10
+#   Slot 3: 11:00
+#   Slot 4: 11:50
+#   Slot 5: 12:40
+#   Slot 6: 13:30
+#   Slot 7: 14:20
+#   Slot 8: 15:10
+FRIDAY_EXAM_BLOCK_DAY: str = "Friday"
+FRIDAY_EXAM_BLOCK_SLOTS: List[int] = [6, 7]  # Approx 13:20–15:10 equivalent
+
+# Max theory hours per instructor per day
+MAX_THEORY_HOURS_PER_DAY: int = 4
+# We convert hours to slots: 4 hours / (50 minutes ≈ 1 hour) => 4 slots
+MAX_THEORY_SLOTS_PER_DAY: int = 4
+
+# Course types
+COURSE_TYPE_THEORY: str = "theory"
+COURSE_TYPE_LAB: str = "lab"
+
+# Department tags used for elective overlap rule
+DEPARTMENT_CENG: str = "CENG"
+DEPARTMENT_SENG: str = "SENG"
+
+
+#
+# Data Models
+#
+
+
+@dataclass
+class TimeSlot:
+    """Represents a single time slot during a week."""
+    day: str  # e.g., "Monday"
+    slot_index: int  # 0..SLOTS_PER_DAY-1
+
+    def __str__(self) -> str:
+        return f"{self.day} - Slot {self.slot_index}"
+
+
+@dataclass
+class Instructor:
+    """Represents an instructor with availability and identity."""
+    id: str
+    name: str
+    # availability[day] = list of slot indices that the instructor CAN teach
+    availability: Dict[str, List[int]] = field(default_factory=dict)
+
+
+@dataclass
+class Classroom:
+    """Represents a classroom with capacity and type."""
+    id: str
+    name: str
+    capacity: int
+    # classroom_type: "theory", "lab", or "hybrid" (both)
+    classroom_type: str
+
+
+@dataclass
+class Course:
+    """Represents a single course."""
+    id: str
+    name: str
+    department: str  # e.g., "CENG" or "SENG"
+    is_elective: bool
+    # Number of weekly theory and lab slots
+    weekly_theory_slots: int
+    weekly_lab_slots: int
+    # Instructor IDs for theory and lab parts
+    theory_instructor_id: Optional[str] = None
+    lab_instructor_id: Optional[str] = None
+    # If labs must follow a specific theory group/time etc., we handle logically
+    # via scheduling constraints rather than explicit modeling here.
+    expected_enrollment: int = 0
+
+
+@dataclass
+class CourseSession:
+    """
+    Represents one scheduled session of a course (either theory or lab).
+    """
+    course_id: str
+    session_type: str  # "theory" or "lab"
+    instructor_id: str
+    classroom_id: str
+    timeslot: TimeSlot
+
+
+@dataclass
+class BeePlanInputData:
+    """
+    Aggregate container for scheduler input.
+    """
+    instructors: Dict[str, Instructor]
+    classrooms: Dict[str, Classroom]
+    courses: Dict[str, Course]
+
+
+@dataclass
+class BeePlanSchedule:
+    """
+    Represents a full weekly schedule: mapping course_id to its scheduled sessions.
+    """
+    # Key: course_id, Value: list of CourseSession
+    sessions_by_course: Dict[str, List[CourseSession]] = field(default_factory=dict)
+
+    def add_session(self, session: CourseSession) -> None:
+        if session.course_id not in self.sessions_by_course:
+            self.sessions_by_course[session.course_id] = []
+        self.sessions_by_course[session.course_id].append(session)
+
+    def remove_session(self, session: CourseSession) -> None:
+        if session.course_id in self.sessions_by_course:
+            self.sessions_by_course[session.course_id] = [
+                s for s in self.sessions_by_course[session.course_id]
+                if not (
+                    s.session_type == session.session_type
+                    and s.timeslot.day == session.timeslot.day
+                    and s.timeslot.slot_index == session.timeslot.slot_index
+                    and s.classroom_id == session.classroom_id
+                    and s.instructor_id == session.instructor_id
+                )
+            ]
+            if not self.sessions_by_course[session.course_id]:
+                del self.sessions_by_course[session.course_id]
+
+    def all_sessions(self) -> List[CourseSession]:
+        """Convenience method to iterate all course sessions."""
+        all_s: List[CourseSession] = []
+        for sessions in self.sessions_by_course.values():
+            all_s.extend(sessions)
+        return all_s
+
+    def __str__(self) -> str:
+        lines: List[str] = []
+        for course_id, sessions in self.sessions_by_course.items():
+            lines.append(f"Course: {course_id}")
+            for s in sessions:
+                lines.append(
+                    f"  - {s.session_type.upper()} | "
+                    f"{s.timeslot.day} Slot {s.timeslot.slot_index} | "
+                    f"Instructor: {s.instructor_id} | "
+                    f"Room: {s.classroom_id}"
+                )
+        return "\n".join(lines)

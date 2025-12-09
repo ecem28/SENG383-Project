@@ -1,0 +1,303 @@
+"""
+main.py
+
+Example usage of the BeePlan scheduling system.
+
+This file:
+- Loads sample data (hard-coded here; you can replace with CSV/JSON loaders).
+- Runs the scheduler.
+- Prints the resulting schedule or user-friendly error messages.
+"""
+
+import json
+import csv
+from typing import Dict, List
+
+from models import (
+    BeePlanInputData,
+    Instructor,
+    Classroom,
+    Course,
+    BeePlanSchedule,
+    DAYS_OF_WEEK,
+    SLOTS_PER_DAY,
+)
+from scheduler import Scheduler
+from validator import InstructorConflictError, CapacityError, RuleViolationError
+
+
+#
+# Input loading and validation helpers
+#
+
+
+def load_instructors_from_json(path: str) -> Dict[str, Instructor]:
+    """
+    Load instructors from a JSON file.
+
+    Expected JSON structure:
+    [
+      {
+        "id": "I1",
+        "name": "Alice",
+        "availability": {
+          "Monday": [0,1,2],
+          "Tuesday": [3,4],
+          ...
+        }
+      },
+      ...
+    ]
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Instructors file not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in instructors file: {path}") from exc
+
+    instructors: Dict[str, Instructor] = {}
+    for item in data:
+        # Basic field validation
+        if "id" not in item or "name" not in item or "availability" not in item:
+            raise ValueError(
+                "Invalid instructor record; expected id, name, availability."
+            )
+        instructors[item["id"]] = Instructor(
+            id=item["id"],
+            name=item["name"],
+            availability=item["availability"],
+        )
+    return instructors
+
+
+def load_classrooms_from_csv(path: str) -> Dict[str, Classroom]:
+    """
+    Load classrooms from a CSV file.
+
+    Expected CSV columns:
+    id,name,capacity,classroom_type
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            classrooms: Dict[str, Classroom] = {}
+            for row in reader:
+                if not {"id", "name", "capacity", "classroom_type"} <= row.keys():
+                    raise ValueError(
+                        "Invalid classroom CSV header. "
+                        "Expected: id,name,capacity,classroom_type"
+                    )
+                try:
+                    capacity = int(row["capacity"])
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Invalid capacity for classroom {row.get('id')}: "
+                        f"{row['capacity']}"
+                    ) from exc
+                classrooms[row["id"]] = Classroom(
+                    id=row["id"],
+                    name=row["name"],
+                    capacity=capacity,
+                    classroom_type=row["classroom_type"],
+                )
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Classrooms file not found: {path}") from exc
+    return classrooms
+
+
+def load_courses_from_json(path: str) -> Dict[str, Course]:
+    """
+    Load courses from a JSON file.
+
+    Expected JSON structure:
+    [
+      {
+        "id": "CENG101",
+        "name": "Intro to CENG",
+        "department": "CENG",
+        "is_elective": false,
+        "weekly_theory_slots": 3,
+        "weekly_lab_slots": 1,
+        "theory_instructor_id": "I1",
+        "lab_instructor_id": "I2",
+        "expected_enrollment": 80
+      },
+      ...
+    ]
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Courses file not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in courses file: {path}") from exc
+
+    courses: Dict[str, Course] = {}
+    for item in data:
+        required_fields = {
+            "id",
+            "name",
+            "department",
+            "is_elective",
+            "weekly_theory_slots",
+            "weekly_lab_slots",
+            "expected_enrollment",
+        }
+        if not required_fields <= item.keys():
+            raise ValueError(
+                f"Invalid course record; missing fields in {item.get('id', 'UNKNOWN')}."
+            )
+
+        courses[item["id"]] = Course(
+            id=item["id"],
+            name=item["name"],
+            department=item["department"],
+            is_elective=bool(item["is_elective"]),
+            weekly_theory_slots=int(item["weekly_theory_slots"]),
+            weekly_lab_slots=int(item["weekly_lab_slots"]),
+            theory_instructor_id=item.get("theory_instructor_id"),
+            lab_instructor_id=item.get("lab_instructor_id"),
+            expected_enrollment=int(item["expected_enrollment"]),
+        )
+    return courses
+
+
+#
+# Sample data for a working example (no files needed)
+#
+
+
+def build_sample_data() -> BeePlanInputData:
+    """
+    Create a small in-memory dataset for demonstration.
+    """
+
+    # Instructors with simple availability (every day, all slots)
+    instructor_availability = {day: list(range(SLOTS_PER_DAY)) for day in DAYS_OF_WEEK}
+
+    instructors = {
+        "I1": Instructor(id="I1", name="Alice", availability=instructor_availability),
+        "I2": Instructor(id="I2", name="Bob", availability=instructor_availability),
+        "I3": Instructor(id="I3", name="Carla", availability=instructor_availability),
+    }
+
+    # Classrooms
+    classrooms = {
+        "R1": Classroom(id="R1", name="Room 1", capacity=80, classroom_type="theory"),
+        "R2": Classroom(id="R2", name="Room 2", capacity=40, classroom_type="lab"),
+        "R3": Classroom(id="R3", name="Room 3", capacity=60, classroom_type="hybrid"),
+    }
+
+    # Courses
+    courses = {
+        "CENG101": Course(
+            id="CENG101",
+            name="Intro to Computing",
+            department="CENG",
+            is_elective=False,
+            weekly_theory_slots=3,
+            weekly_lab_slots=1,
+            theory_instructor_id="I1",
+            lab_instructor_id="I2",
+            expected_enrollment=70,
+        ),
+        "SENG201": Course(
+            id="SENG201",
+            name="Software Engineering Basics",
+            department="SENG",
+            is_elective=False,
+            weekly_theory_slots=2,
+            weekly_lab_slots=1,
+            theory_instructor_id="I2",
+            lab_instructor_id="I3",
+            expected_enrollment=50,
+        ),
+        "CENG350": Course(
+            id="CENG350",
+            name="CENG Elective Course",
+            department="CENG",
+            is_elective=True,
+            weekly_theory_slots=2,
+            weekly_lab_slots=0,
+            theory_instructor_id="I3",
+            lab_instructor_id=None,
+            expected_enrollment=30,
+        ),
+        "SENG410": Course(
+            id="SENG410",
+            name="SENG Elective Course",
+            department="SENG",
+            is_elective=True,
+            weekly_theory_slots=2,
+            weekly_lab_slots=0,
+            theory_instructor_id="I1",
+            lab_instructor_id=None,
+            expected_enrollment=25,
+        ),
+    }
+
+    return BeePlanInputData(
+        instructors=instructors,
+        classrooms=classrooms,
+        courses=courses,
+    )
+
+
+#
+# Main execution
+#
+
+
+def print_schedule(schedule: BeePlanSchedule, data: BeePlanInputData) -> None:
+    """
+    Pretty-print the schedule with course and instructor names.
+    """
+    print("==== Generated Weekly Schedule ====")
+    for course_id, sessions in schedule.sessions_by_course.items():
+        course = data.courses[course_id]
+        print(f"\nCourse: {course.id} - {course.name}")
+        for s in sessions:
+            instructor = data.instructors[s.instructor_id]
+            classroom = data.classrooms[s.classroom_id]
+            print(
+                f"  - {s.session_type.upper()} | "
+                f"{s.timeslot.day} Slot {s.timeslot.slot_index} | "
+                f"Instructor: {instructor.name} | "
+                f"Room: {classroom.name}"
+            )
+    print("==================================")
+
+
+def main() -> None:
+    """
+    Entry point: build sample data, run scheduler, handle errors.
+    """
+    # In production, you might choose between loading from files or using
+    # in-memory data. Here we use sample data for a guaranteed working example.
+    try:
+        data = build_sample_data()
+
+        scheduler = Scheduler(data)
+        schedule = scheduler.generate_schedule()
+        print_schedule(schedule, data)
+
+    except FileNotFoundError as e:
+        print(f"[ERROR] Input file not found: {e}")
+    except ValueError as e:
+        print(f"[ERROR] Invalid input data: {e}")
+    except InstructorConflictError as e:
+        print(f"[ERROR] Instructor conflict: {e}")
+    except CapacityError as e:
+        print(f"[ERROR] Classroom capacity issue: {e}")
+    except RuleViolationError as e:
+        print(f"[ERROR] Scheduling rule violation: {e}")
+    except Exception as e:
+        # Fallback for unexpected errors
+        print(f"[ERROR] Unexpected error: {e}")
+
+
+if __name__ == "__main__":
+    main()

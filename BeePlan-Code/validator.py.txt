@@ -1,0 +1,160 @@
+"""
+validator.py
+
+High-level validation and rule checking for BeePlan scheduling.
+"""
+
+from typing import Dict, List
+
+from models import (
+    TimeSlot,
+    Classroom,
+    Instructor,
+    Course,
+    CourseSession,
+)
+from conflict_checker import (
+    does_instructor_have_conflict,
+    does_classroom_have_conflict,
+    is_in_friday_exam_block,
+    is_lab_following_theory,
+    exceeds_daily_theory_limit,
+    electives_overlap,
+)
+
+#
+# Custom Exceptions
+#
+
+
+class InstructorConflictError(Exception):
+    """Raised when an instructor has conflicting sessions."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+class CapacityError(Exception):
+    """Raised when classroom capacity constraints are violated."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+class RuleViolationError(Exception):
+    """Raised when a high-level scheduling rule is violated."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+#
+# Validation helpers
+#
+
+
+def validate_instructor_availability(
+    instructor: Instructor,
+    timeslot: TimeSlot,
+) -> bool:
+    """
+    Check if the instructor is available at the given timeslot.
+    """
+    available_slots = instructor.availability.get(timeslot.day, [])
+    return timeslot.slot_index in available_slots
+
+
+def validate_classroom_capacity_and_type(
+    classroom: Classroom,
+    course: Course,
+) -> None:
+    """
+    Validate classroom capacity and type for the given course.
+    Raises CapacityError or RuleViolationError if invalid.
+    """
+    if course.expected_enrollment > classroom.capacity:
+        raise CapacityError(
+            f"Course {course.id} expected enrollment ({course.expected_enrollment}) "
+            f"exceeds capacity of classroom {classroom.id} ({classroom.capacity})."
+        )
+
+    # Classroom type compatibility
+    if course.weekly_lab_slots > 0:
+        # If course has lab, labs must be in a lab or hybrid room.
+        if classroom.classroom_type not in ("lab", "hybrid"):
+            raise RuleViolationError(
+                f"Course {course.id} lab requires lab/hybrid classroom. "
+                f"Got {classroom.classroom_type} for room {classroom.id}."
+            )
+    # For theory, we allow "theory" or "hybrid" or "lab" depending on your rules;
+    # we assume "theory" or "hybrid" is preferred. Modify if needed.
+
+
+def check_session_constraints(
+    schedule,
+    new_session: CourseSession,
+    course_catalog: Dict[str, Course],
+    instructors: Dict[str, Instructor],
+    classrooms: Dict[str, Classroom],
+) -> None:
+    """
+    Validate all constraints when adding new_session to the schedule.
+
+    Raises:
+      - InstructorConflictError
+      - CapacityError
+      - RuleViolationError
+    """
+    course = course_catalog[new_session.course_id]
+    instructor = instructors[new_session.instructor_id]
+    classroom = classrooms[new_session.classroom_id]
+
+    # Instructor availability
+    if not validate_instructor_availability(instructor, new_session.timeslot):
+        raise InstructorConflictError(
+            f"Instructor {instructor.id} not available at {new_session.timeslot}."
+        )
+
+    # Instructor time conflict
+    if does_instructor_have_conflict(schedule, new_session):
+        raise InstructorConflictError(
+            f"Instructor {instructor.id} has another session at {new_session.timeslot}."
+        )
+
+    # Classroom time conflict
+    if does_classroom_have_conflict(schedule, new_session):
+        raise RuleViolationError(
+            f"Classroom {classroom.id} already occupied at {new_session.timeslot}."
+        )
+
+    # Friday exam block rule
+    if is_in_friday_exam_block(new_session.timeslot):
+        raise RuleViolationError(
+            f"Cannot schedule course {course.id} at Friday exam block "
+            f"{new_session.timeslot}."
+        )
+
+    # Lab must follow theory
+    # We pass all existing sessions of that course plus the new one.
+    existing = schedule.sessions_by_course.get(new_session.course_id, [])
+    if not is_lab_following_theory(existing, new_session):
+        raise RuleViolationError(
+            f"Lab for course {course.id} must follow a theory session."
+        )
+
+    # Max theory per instructor per day
+    if exceeds_daily_theory_limit(schedule, new_session):
+        raise RuleViolationError(
+            f"Instructor {instructor.id} exceeds daily theory limit on "
+            f"{new_session.timeslot.day}."
+        )
+
+    # Elective overlap rule
+    if electives_overlap(schedule, new_session, course_catalog):
+        raise RuleViolationError(
+            "CENG and SENG elective overlap detected at "
+            f"{new_session.timeslot} for course {course.id}."
+        )
+
+    # Classroom capacity and type
+    validate_classroom_capacity_and_type(classroom, course)
