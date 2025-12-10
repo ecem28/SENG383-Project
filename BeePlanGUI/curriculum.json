@@ -1,0 +1,17 @@
+{
+    "SENG 101": {
+        "instructor": "Dr. A",
+        "hours": 3,
+        "type": "theory"
+    },
+    "MATH 157": {
+        "instructor": "Dr. B",
+        "hours": 3,
+        "type": "theory"
+    },
+    "PHYS 131": {
+        "instructor": "Dr. C",
+        "hours": 3,
+        "type": "theory"
+    }
+}
