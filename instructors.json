@@ -1,0 +1,23 @@
+{
+    "Dr. A": {
+        "available": [
+            "Monday 09:20",
+            "Monday 10:20",
+            "Tuesday 09:20"
+        ]
+    },
+    "Dr. B": {
+        "available": [
+            "Tuesday 10:20",
+            "Wednesday 09:20",
+            "Wednesday 10:20"
+        ]
+    },
+    "Dr. C": {
+        "available": [
+            "Thursday 09:20",
+            "Thursday 10:20",
+            "Friday 09:20"
+        ]
+    }
+}
