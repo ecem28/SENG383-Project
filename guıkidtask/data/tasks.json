@@ -1,0 +1,12 @@
+[
+  {
+    "id": 101,
+    "title": "yatak topla",
+    "description": "",
+    "dueDate": "2025-12-15",
+    "points": 10,
+    "status": "PENDING",
+    "assignedUserId": 2,
+    "avgRating": 0.0
+  }
+]

@@ -1,0 +1,11 @@
+[
+  {
+    "id": 201,
+    "name": "toys",
+    "type": "PRODUCT",
+    "cost": 100,
+    "requiredLevel": 1,
+    "status": "PENDING",
+    "requestedUserId": 1
+  }
+]
