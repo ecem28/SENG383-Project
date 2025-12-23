@@ -13,6 +13,8 @@
 - Data saved in JSON files for persistence.
 - Next step: integrate parent-child task assignment logic.
 
+#PROJECT VİDEO
+## Video 📽 [Final Sunum Videosu](https://drive.google.com/file/d/1IdtM7Dm0FOJFfyKawfD31iNhTTZdERrd/view?usp=drive_link)
 
   # KidTask — Final Proje (Student A)
 
@@ -27,7 +29,7 @@ Wishes (istekler) puanla alınır ve parent tarafından onaylanır.
 Python 3.10+ ile çalışır. Çalıştırmak için:
 
 ```bash
-## Video 📽 [Final Sunum Videosu](https://drive.google.com/file/d/1IdtM7Dm0FOJFfyKawfD31iNhTTZdERrd/view?usp=drive_link) 
+
 python main.py
 # Default kullanıcılar
 ecem — child
