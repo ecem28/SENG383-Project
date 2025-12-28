@@ -11,16 +11,19 @@ All logic is implemented inside main.py, including:
 All code written and reviewed by Student B.
 
 
-UPDATE - BeePlan Proje Katkıları
+UPDATE - BeePlan Project
 
-Proje kapsamında BeePlan sistemine geçiş yapılmıştır. 
-Student B olarak yaptığım güncel katkılar:
+The BeePlan system has been implemented as part of the project.
 
-- Algoritma: Derslerin 5 güne dengeli yayılması 
-- Kısıtlama: Günlük max 4 saat hoca ders sınırı 
-- Raporlama: Türkçe doğrulama raporları sayfası.
+My recent contributions as Student B:
 
-AI Analiz Kartı:
-Prompt: "Günde max 4 saat hoca sınırı ekle."
-AI Çıktısı: 5 saatlik dersi tamamen sildi.
-Revizyon: Ders bölme (split logic) manuel eklendi.
+- Algorithm: Even distribution of classes over 5 days
+
+- Restriction: Maximum 4 hours of instructor classes per day
+
+- Reporting: Turkish language verification reports page.
+
+AI Analysis Card:
+
+Prompt: "Add a maximum of 4 hours of instructor classes per day."
+AI Output: Completely removed the 5-hour class.
